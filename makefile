@@ -1,74 +1,123 @@
-# All the external objects that the current submodule depends on
-# Those objects have to be up to date
-# tempo1 = $(wildcard ../SM-Scoped_timer/obj/*.o)
-# tempo2 = $(wildcard ../SM-Omp_extra/obj/*.o)
-# tempo3 = $(wildcard ../SM-Multi_array/*.o)
-EXTERNAL_OBJ = $(tempo1) $(tempo2) $(tempo3)
-
-TARGET_NAME = interpolation
-TARGET_STATIC = $(TARGET_NAME).a
+NAME = interpolation
 PYLIB_EXT = $(if $(filter $(OS),Windows_NT),.pyd,.so)
-TARGET_PYLIB = ../Python/$(TARGET_NAME)$(PYLIB_EXT)
+TARGET_STATIC = lib$(NAME).a
+TARGET_PYLIB = ../../Python_2_7/lib/$(NAME)$(PYLIB_EXT)
 
-# standard subdirectories
+MULTI_ARRAY = ../Multi_array
+OMP_EXTRA = ../Omp_extra
+INTERPOLATION = ../Interpolation
+LIBS = ../libs
+
 IDIR = includes
 ODIR = obj
 LDIR = lib
 SDIR = src
 
-# Lits of .c and corresponding .o and .h
+OMP_EXTRA_OBJ = $(wildcard $(OMP_EXTRA)/$(ODIR)/*.o)
+
+EXTERNAL_OBJ = $(OMP_EXTRA_OBJ)
+EXTERNAL_INCLUDES = -I$(MULTI_ARRAY)/$(IDIR) -I$(OMP_EXTRA)/$(IDIR) -I$(INTERPOLATION)/$(IDIR)
+
 SRC  = $(wildcard $(SDIR)/*.cpp)
 OBJ  = $(patsubst $(SDIR)/%.cpp,$(ODIR)/%.o,$(SRC))
+ASS  = $(patsubst $(SDIR)/%.cpp,$(ODIR)/%.s,$(SRC))
 DEPS = $(OBJ:.o=.d)
-# HEAD = $(patsubst $(SDIR)/%.cpp,$(IDIR)/%.h,$(SRC))
 
-# Toolchain, using mingw on windows
-CC = $(OS:Windows_NT=x86_64-w64-mingw32-)g++
+CXX = $(OS:Windows_NT=x86_64-w64-mingw32-)g++
+OPTIMIZATION = -O3 -march=native
+CPP_STD = -std=c++14
+WARNINGS = -Wall
+MINGW_COMPATIBLE = $(OS:Windows_NT=-DMS_WIN64 -D_hypot=hypot)
+DEPS_FLAG = -MMD -MP
 
-# flags
-CFLAGS = -Ofast -march=native -std=c++14 -MMD -MP -Wall $(OS:Windows_NT=-DMS_WIN64 -D_hypot=hypot)
-OMPFLAGS = -fopenmp -fopenmp-simd
-FFTWFLAGS = -lfftw3
-MATHFLAGS = -lm
-SHRFLAGS = -fPIC -shared
+POSITION_INDEP = -fPIC
+SHARED = -shared
 
-# Python directories
+OMP = -fopenmp -fopenmp-simd
+
 PY = $(OS:Windows_NT=/c/Anaconda2/)python
-ifeq ($(USERNAME),simon)
-    PY = $(OS:Windows_NT=/cygdrive/c/Anaconda2/)python
-endif
-ifeq ($(USERNAME),Sous-sol)
-    PY = $(OS:Windows_NT=/cygdrive/c/ProgramData/Anaconda2/)python
-endif
 
-# includes
-PYINCL := $(shell $(PY) -m pybind11 --includes)
+PY_INCL := $(shell $(PY) -m pybind11 --includes)
 ifneq ($(OS),Windows_NT)
-    PYINCL += -I /usr/include/python2.7/
+    PY_INCL += -I /usr/include/python2.7/
 endif
 
-# libraries
-PYLIBS = $(OS:Windows_NT=-L /c/Anaconda2/libs/ -l python27) $(PYINCL)
-ifeq ($(USERNAME),simon)
-    PYLIBS = $(OS:Windows_NT=-L /cygdrive/c/Anaconda2/libs/ -l python27) $(PYINCL)
-endif
-ifeq ($(USERNAME),Sous-sol)
-    PYLIBS = $(OS:Windows_NT=-L /cygdrive/c/ProgramData/Anaconda2/libs/ -l python27) $(PYINCL) 
-endif
+PY_LINKS = $(OS:Windows_NT=-L /c/Anaconda2/ -lpython27)
+
+LINKS = $(OMP) $(PY_LINKS)
+LINKING = $(CXX) $(OPTIMIZATION) $(POSITION_INDEP) $(SHARED)  -o $(TARGET_PYLIB) $(OBJ) $(LINKS) $(EXTERNAL_OBJ) $(DEPS_FLAG) $(MINGW_COMPATIBLE)
+STATIC_LIB = ar cr $(TARGET_STATIC) $(OBJ) 
+
+INCLUDES = $(OMP) $(PY_INCL) $(EXTERNAL_INCLUDES)
+COMPILE = $(CXX) $(CPP_STD) $(OPTIMIZATION) $(POSITION_INDEP) $(WARNINGS) -c -o $@ $< $(INCLUDES) $(DEPS_FLAG) $(MINGW_COMPATIBLE)
+ASSEMBLY = $(CXX) $(CPP_STD) $(OPTIMIZATION) $(POSITION_INDEP) $(WARNINGS) -S -o $@ $< $(INCLUDES) $(DEPS_FLAG) $(MINGW_COMPATIBLE)
+
+LINK_BENCHMARK = \
+	-L$(LIBS)/benchmark/build/src -lbenchmark -lpthread -lshlwapi \
+	$(OMP)
+
+LINKING_BENCHMARK = \
+	$(CXX) $< obj/Interpolation.o $(EXTERNAL_OBJ) -O0 -march=native \
+	-static \
+	$(LINK_BENCHMARK)\
+	$(DEPS_FLAG) $(MINGW_COMPATIBLE) \
+	-o $@ 
+
+INCLUDES_BENCHMARK = \
+	-I $(LIBS)/benchmark/include \
+	$(INCLUDES)
+			
+COMPILE_BENCHMARK = \
+	$(CXX) $(CPP_STD) $< -O0 -march=native \
+	$(INCLUDES_BENCHMARK) \
+	$(DEPS_FLAG) $(MINGW_COMPATIBLE) \
+	-c -o $@ 
+
+compile_objects : $(OBJ)
+
+assembly : $(ASS)
+
+all : $(TARGET_PYLIB) $(TARGET_STATIC) $(OBJ) $(ASS)
+
+python_debug_library : $(TARGET_PYLIB)
+
+static_library : $(TARGET_STATIC)
+
+benchmark : benchmark.exe
 
 $(TARGET_PYLIB): $(OBJ)
 	@ echo " "
 	@ echo "---------Compile library $(TARGET_PYLIB)---------"
-	$(CC) $(SHRFLAGS) -o $(TARGET_PYLIB) $(OBJ) $(EXTERNAL_OBJ) $(CFLAGS) $(OMPFLAGS) $(PYLIBS)
+	$(LINKING)
+
+$(TARGET_STATIC) : $(OBJ)
+	@ echo " "
+	@ echo "---------Compiling static library $(TARGET_STATIC)---------"
+	$(STATIC_LIB)
 	
+benchmark.exe : benchmark.o
+	@ echo " "
+	@ echo "---------Compile $@ ---------"
+	$(LINKING_BENCHMARK)
+
+benchmark.o : benchmark.cpp
+	@ echo " "
+	@ echo "---------Compile $@ from $< ---------"
+	$(COMPILE_BENCHMARK)
+
 $(ODIR)/%.o : $(SDIR)/%.cpp
 	@ echo " "
 	@ echo "---------Compile object $@ from $<--------"
-	$(CC) $(SHRFLAGS) -c -Wall -o $@ $< $(CFLAGS) $(OMPFLAGS) $(PYLIBS) 
-
+	$(COMPILE)
+	
+$(ODIR)/%.s : $(SDIR)/%.cpp
+	@ echo " "
+	@ echo "---------Assembly $@ from $<--------"
+	$(ASSEMBLY)
+	
 -include $(DEPS)
 
 clean:
-	@rm -f $(TARGET_PYLIB) $(TARGET_STATIC) $(OBJ)
+	@rm -f $(TARGET_PYLIB) $(TARGET_STATIC) $(OBJ) $(ASS) $(DEPS) benchmark.o benchmark.exe
 	 	 
-.PHONY: clean, dummy
+.PHONY: all , clean , python_debug_library , compile_objects , assembly , benchmark
